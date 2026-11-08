@@ -28,16 +28,13 @@
   </section>
   <section class="card">
     <label for="text">Text to analyse</label>
-    <textarea id="text" placeholder="Paste or edit your text here…"></textarea>
-    <div class="row"><button id="analyse">Analyse readability</button><span id="counts" class="small"></span></div>
+    <textarea id="text" placeholder="For separate section scores, put a section heading on its own line, then its text. Separate sections with a line containing ---. Each section needs at least 20 words."></textarea>
+    <p class="hint">For section-by-section scores, put each section heading on its own line and separate sections with <code>---</code>. Example: Introduction, its text, <code>---</code>, Methods, its text. Each section needs at least 20 words. Without separators, the whole document is scored as one section.</p>
+    <div class="row"><button id="analyse">Analyse readability</button></div>
   </section>
   <section id="output" class="card hidden" aria-live="polite">
     <h2 style="margin:0">Results</h2>
-    <div class="results">
-      <article class="metric"><h3>Flesch Reading Ease</h3><div class="score" id="flesch">—</div><div class="interpret" id="fleschLabel"></div><p class="small">Higher scores mean easier reading. Typical scale: 0–100.</p></article>
-      <article class="metric"><h3>Gunning Fog Index</h3><div class="score" id="fog">—</div><div class="interpret" id="fogLabel"></div><p class="small">Approximate years of education needed to understand the text.</p></article>
-    </div>
-    <p id="stats" class="small"></p>
+    <div id="sectionResults"></div>
   </section>
   <p class="foot">These formulas are estimates for English prose. They use sentence, word, and syllable counts; results can be misleading for lists, dialogue, technical writing, or very short texts.</p>
 </main>
@@ -75,13 +72,34 @@
   function fogDescription(score){
     if(score<8)return 'Easy to read'; if(score<12)return 'Plain / conversational'; if(score<17)return 'Difficult'; return 'Very difficult';
   }
+  function getSections(raw){
+    const blocks=raw.split(/^\s*---\s*$/m).map(s=>s.trim()).filter(Boolean);
+    if(blocks.length<=1)return [{title:'Whole document',text:blocks[0]||''}];
+    return blocks.map((block,i)=>{
+      const lines=block.split(/\r?\n/);
+      const title=lines[0].trim()||`Section ${i+1}`;
+      return {title,text:lines.slice(1).join('\n').trim()};
+    });
+  }
   $('analyse').addEventListener('click',()=>{
+    const container=$('sectionResults'); container.innerHTML='';
     try{
-      const r=analyse(textArea.value);
-      $('flesch').textContent=r.flesch.toFixed(1); $('fleschLabel').textContent=fleschDescription(r.flesch);
-      $('fog').textContent=r.fog.toFixed(1); $('fogLabel').textContent=fogDescription(r.fog);
-      $('stats').textContent=`${r.n.toLocaleString()} words · ${r.sentences.toLocaleString()} sentences · ${r.syllableCount.toLocaleString()} estimated syllables · ${r.complex.toLocaleString()} complex words (3+ syllables)`;
-      $('output').classList.remove('hidden'); status.textContent='Analysis complete.';
+      const sections=getSections(textArea.value);
+      const results=sections.map((section,i)=>({section,i,result:analyse(section.text)}));
+      results.forEach(({section,i,result:r})=>{
+        const article=document.createElement('article'); article.className='card';
+        const heading=document.createElement('h3'); heading.textContent=section.title||`Section ${i+1}`; article.appendChild(heading);
+        const grid=document.createElement('div'); grid.className='results';
+        grid.innerHTML='<div class="metric"><h3>Flesch Reading Ease</h3><div class="score"></div><div class="interpret"></div><p class="small">Higher scores mean easier reading. Typical scale: 0–100.</p></div><div class="metric"><h3>Gunning Fog Index</h3><div class="score"></div><div class="interpret"></div><p class="small">Approximate years of education needed to understand the text.</p></div>';
+        const scores=grid.querySelectorAll('.score'), labels=grid.querySelectorAll('.interpret');
+        scores[0].textContent=r.flesch.toFixed(1); labels[0].textContent=fleschDescription(r.flesch);
+        scores[1].textContent=r.fog.toFixed(1); labels[1].textContent=fogDescription(r.fog);
+        article.appendChild(grid);
+        const stats=document.createElement('p'); stats.className='small';
+        stats.textContent=`${r.n.toLocaleString()} words · ${r.sentences.toLocaleString()} sentences · ${r.syllableCount.toLocaleString()} estimated syllables · ${r.complex.toLocaleString()} complex words (3+ syllables)`;
+        article.appendChild(stats); container.appendChild(article);
+      });
+      $('output').classList.remove('hidden'); status.className='status'; status.textContent=`Analysis complete: ${results.length} section${results.length===1?'':'s'} scored.`;
     }catch(e){$('output').classList.add('hidden');status.textContent=e.message;status.className='status error';}
   });
   async function readFile(file){
