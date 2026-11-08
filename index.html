@@ -28,8 +28,8 @@
   </section>
   <section class="card">
     <label for="text">Text to analyse</label>
-    <textarea id="text" placeholder="For separate section scores, put a section heading on its own line, then its text. Separate sections with a line containing ---. Each section needs at least 20 words."></textarea>
-    <p class="hint">For section-by-section scores, put each section heading on its own line and separate sections with <code>---</code>. Example: Introduction, its text, <code>---</code>, Methods, its text. Each section needs at least 20 words. Without separators, the whole document is scored as one section.</p>
+    <textarea id="text" placeholder="Paste text with headings on their own lines, or separate sections with ---."></textarea>
+    <p class="hint">Sections are detected automatically from standalone headings (for example, “Introduction” or “2. Methods”). You can also separate sections manually with a line containing <code>---</code>. Headings are excluded from the scores. Each section needs at least 20 words; short sections are shown without scores.</p>
     <div class="row"><button id="analyse">Analyse readability</button></div>
   </section>
   <section id="output" class="card hidden" aria-live="polite">
@@ -72,34 +72,77 @@
   function fogDescription(score){
     if(score<8)return 'Easy to read'; if(score<12)return 'Plain / conversational'; if(score<17)return 'Difficult'; return 'Very difficult';
   }
+  const knownHeadings=new Set([
+    'abstract','introduction','background','literature review','related work',
+    'methods','method','methodology','materials and methods','results',
+    'findings','discussion','conclusion','conclusions','recommendations',
+    'limitations','future work','references','appendix','appendices',
+    'executive summary','overview','acknowledgements','acknowledgments'
+  ]);
+  function headingInfo(line){
+    const clean=line.trim().replace(/^#+\s*/,'').replace(/\s+#*$/,'');
+    if(!clean || clean.length>100 || clean.split(/\s+/).length>12 || /[.!?,;:]$/.test(clean)) return null;
+    const title=clean.replace(/^(\d+(?:\.\d+)*[.)]?\s+)/,'').trim();
+    const normalized=title.toLowerCase();
+    const numbered=/^\d+(?:\.\d+)*[.)]?\s+\S/.test(clean);
+    const known=knownHeadings.has(normalized);
+    const words=title.split(/\s+/);
+    const titleCase=words.length<=9 && words.every(w=>!/[a-z]/.test(w) || /^[A-Z][a-z]/.test(w) || /^(and|or|of|the|in|for|to|with|on)$/i.test(w));
+    const allCaps=/[A-Z]/.test(title) && title===title.toUpperCase();
+    return (known || numbered || titleCase || allCaps) ? {title:clean,known} : null;
+  }
   function getSections(raw){
     const blocks=raw.split(/^\s*---\s*$/m).map(s=>s.trim()).filter(Boolean);
-    if(blocks.length<=1)return [{title:'Whole document',text:blocks[0]||''}];
-    return blocks.map((block,i)=>{
-      const lines=block.split(/\r?\n/);
-      const title=lines[0].trim()||`Section ${i+1}`;
-      return {title,text:lines.slice(1).join('\n').trim()};
-    });
+    if(blocks.length>1){
+      return blocks.map((block,i)=>{
+        const lines=block.split(/\r?\n/);
+        const info=headingInfo(lines[0]||'');
+        return {title:info?.title||`Section ${i+1}`,text:(info?lines.slice(1):lines).join('\n').trim()};
+      });
+    }
+    const lines=raw.replace(/\r/g,'').split('\n');
+    const headings=[];
+    lines.forEach((line,index)=>{const info=headingInfo(line);if(info)headings.push({index,...info});});
+    const knownCount=headings.filter(h=>h.known).length;
+    if(headings.length<2 && knownCount===0) return [{title:'Whole document',text:raw.trim()}];
+    const sections=[];
+    if(headings.length){
+      const opening=lines.slice(0,headings[0].index).join('\n').trim();
+      if(opening) sections.push({title:'Opening text',text:opening});
+      headings.forEach((h,i)=>sections.push({
+        title:h.title,
+        text:lines.slice(h.index+1,headings[i+1]?.index ?? lines.length).join('\n').trim()
+      }));
+    }
+    return sections.length?sections:[{title:'Whole document',text:raw.trim()}];
   }
   $('analyse').addEventListener('click',()=>{
     const container=$('sectionResults'); container.innerHTML='';
     try{
       const sections=getSections(textArea.value);
-      const results=sections.map((section,i)=>({section,i,result:analyse(section.text)}));
-      results.forEach(({section,i,result:r})=>{
+      let scored=0;
+      sections.forEach((section,i)=>{
         const article=document.createElement('article'); article.className='card';
         const heading=document.createElement('h3'); heading.textContent=section.title||`Section ${i+1}`; article.appendChild(heading);
-        const grid=document.createElement('div'); grid.className='results';
-        grid.innerHTML='<div class="metric"><h3>Flesch Reading Ease</h3><div class="score"></div><div class="interpret"></div><p class="small">Higher scores mean easier reading. Typical scale: 0–100.</p></div><div class="metric"><h3>Gunning Fog Index</h3><div class="score"></div><div class="interpret"></div><p class="small">Approximate years of education needed to understand the text.</p></div>';
-        const scores=grid.querySelectorAll('.score'), labels=grid.querySelectorAll('.interpret');
-        scores[0].textContent=r.flesch.toFixed(1); labels[0].textContent=fleschDescription(r.flesch);
-        scores[1].textContent=r.fog.toFixed(1); labels[1].textContent=fogDescription(r.fog);
-        article.appendChild(grid);
-        const stats=document.createElement('p'); stats.className='small';
-        stats.textContent=`${r.n.toLocaleString()} words · ${r.sentences.toLocaleString()} sentences · ${r.syllableCount.toLocaleString()} estimated syllables · ${r.complex.toLocaleString()} complex words (3+ syllables)`;
-        article.appendChild(stats); container.appendChild(article);
+        try{
+          const r=analyse(section.text);
+          const grid=document.createElement('div'); grid.className='results';
+          grid.innerHTML='<div class="metric"><h3>Flesch Reading Ease</h3><div class="score"></div><div class="interpret"></div><p class="small">Higher scores mean easier reading. Typical scale: 0–100.</p></div><div class="metric"><h3>Gunning Fog Index</h3><div class="score"></div><div class="interpret"></div><p class="small">Approximate years of education needed to understand the text.</p></div>';
+          const scores=grid.querySelectorAll('.score'), labels=grid.querySelectorAll('.interpret');
+          scores[0].textContent=r.flesch.toFixed(1); labels[0].textContent=fleschDescription(r.flesch);
+          scores[1].textContent=r.fog.toFixed(1); labels[1].textContent=fogDescription(r.fog);
+          article.appendChild(grid);
+          const stats=document.createElement('p'); stats.className='small';
+          stats.textContent=`${r.n.toLocaleString()} words · ${r.sentences.toLocaleString()} sentences · ${r.syllableCount.toLocaleString()} estimated syllables · ${r.complex.toLocaleString()} complex words (3+ syllables)`;
+          article.appendChild(stats); scored++;
+        }catch(e){
+          const note=document.createElement('p'); note.className='small'; note.textContent=`Not scored: ${e.message}`;
+          article.appendChild(note);
+        }
+        container.appendChild(article);
       });
-      $('output').classList.remove('hidden'); status.className='status'; status.textContent=`Analysis complete: ${results.length} section${results.length===1?'':'s'} scored.`;
+      $('output').classList.remove('hidden'); status.className='status';
+      status.textContent=`Analysis complete: ${scored} of ${sections.length} section${sections.length===1?'':'s'} scored. Check detected section headings before relying on the results.`;
     }catch(e){$('output').classList.add('hidden');status.textContent=e.message;status.className='status error';}
   });
   async function readFile(file){
@@ -116,7 +159,14 @@
         const pages=[];
         for(let i=1;i<=pdf.numPages;i++){
           const page=await pdf.getPage(i); const content=await page.getTextContent();
-          pages.push(content.items.map(item=>item.str).join(' '));
+          const rows=[];
+          content.items.forEach(item=>{
+            const y=item.transform?.[5] ?? 0;
+            let row=rows.find(r=>Math.abs(r.y-y)<3);
+            if(!row){row={y,items:[]};rows.push(row);}
+            row.items.push(item);
+          });
+          pages.push(rows.sort((a,b)=>b.y-a.y).map(row=>row.items.sort((a,b)=>a.transform[4]-b.transform[4]).map(item=>item.str).join(' ')).join('\\n'));
         }
         extracted=pages.join('\n');
       } else throw new Error('Please choose a .txt, .pdf, or .docx file.');
