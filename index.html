@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document Readability Checker</title>
+<style>
+  :root{color-scheme:light;--ink:#172b4d;--muted:#5e6c84;--line:#dfe5ec;--blue:#155eef;--pale:#f5f8ff;--green:#087443;--amber:#9a6700;--red:#b42318}
+  *{box-sizing:border-box}body{margin:0;background:#f6f8fb;color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  main{max-width:920px;margin:42px auto;padding:0 20px}h1{font-size:clamp(1.8rem,4vw,2.5rem);line-height:1.15;margin:0 0 8px}p{color:var(--muted)}.intro{margin:0 0 26px}
+  .card{background:white;border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 8px 28px #172b4d0a;margin:16px 0}.drop{border:2px dashed #b8c7dc;background:#fbfcff;border-radius:12px;padding:24px;text-align:center}.drop.drag{border-color:var(--blue);background:var(--pale)}
+  input[type=file]{max-width:100%}button{border:0;border-radius:9px;background:var(--blue);color:white;font-weight:650;padding:11px 17px;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px}.hint{font-size:.9rem;color:var(--muted);margin:12px 0 0}.status{min-height:24px;color:var(--muted);font-size:.94rem}
+  textarea{width:100%;min-height:190px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:13px;font:inherit;color:var(--ink)}label{display:block;font-weight:650;margin:0 0 8px}.results{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:16px}.metric{padding:18px;border:1px solid var(--line);border-radius:12px;background:#fff}.metric h3{font-size:1rem;margin:0;color:var(--muted)}.score{font-size:2.2rem;font-weight:750;line-height:1.2;margin:7px 0}.interpret{font-weight:650}.small{font-size:.9rem;color:var(--muted)}.hidden{display:none}.error{color:var(--red)}.foot{font-size:.86rem;color:var(--muted);margin-top:18px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Document Readability Checker</h1>
+  <p class="intro">Upload a document or paste text to calculate Flesch Reading Ease and the Gunning Fog Index. Your document is processed in this browser and isn’t uploaded to a server.</p>
+  <section class="card" aria-label="Upload document">
+    <div class="drop" id="drop">
+      <strong>Choose a document</strong><br>
+      <span class="small">Supported formats: .txt, .pdf, .docx</span>
+      <div class="row" style="justify-content:center"><input id="file" type="file" accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></div>
+    </div>
+    <p class="hint">PDF and Word files are read locally in your browser. Scanned PDFs need OCR and aren’t supported by this version.</p>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </section>
+  <section class="card">
+    <label for="text">Text to analyse</label>
+    <textarea id="text" placeholder="Paste or edit your text here…"></textarea>
+    <div class="row"><button id="analyse">Analyse readability</button><span id="counts" class="small"></span></div>
+  </section>
+  <section id="output" class="card hidden" aria-live="polite">
+    <h2 style="margin:0">Results</h2>
+    <div class="results">
+      <article class="metric"><h3>Flesch Reading Ease</h3><div class="score" id="flesch">—</div><div class="interpret" id="fleschLabel"></div><p class="small">Higher scores mean easier reading. Typical scale: 0–100.</p></article>
+      <article class="metric"><h3>Gunning Fog Index</h3><div class="score" id="fog">—</div><div class="interpret" id="fogLabel"></div><p class="small">Approximate years of education needed to understand the text.</p></article>
+    </div>
+    <p id="stats" class="small"></p>
+  </section>
+  <p class="foot">These formulas are estimates for English prose. They use sentence, word, and syllable counts; results can be misleading for lists, dialogue, technical writing, or very short texts.</p>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const fileInput=$('file'), textArea=$('text'), status=$('status'), drop=$('drop');
+  if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  function syllables(word){
+    let w=word.toLowerCase().replace(/[^a-z]/g,''); if(!w) return 0;
+    if(w.length<=3) return 1;
+    w=w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/,'').replace(/^y/,'');
+    const groups=w.match(/[aeiouy]{1,2}/g);
+    return Math.max(1,groups?groups.length:1);
+  }
+  function analyse(raw){
+    const words=(raw.match(/[A-Za-z]+(?:['’][A-Za-z]+)?/g)||[]);
+    const n=words.length;
+    const sentences=(raw.match(/[.!?]+(?:[”’"')\]]*)/g)||[]).length || (raw.trim()?1:0);
+    if(n<20) throw new Error('Please enter at least 20 words for a more useful estimate.');
+    const syllableCount=words.reduce((sum,w)=>sum+syllables(w),0);
+    const complex=words.filter(w=>syllables(w)>=3).length;
+    const wps=n/sentences, spw=syllableCount/n;
+    const flesch=206.835-1.015*wps-84.6*spw;
+    const fog=.4*(wps+100*complex/n);
+    return {n,sentences,syllableCount,complex,flesch,fog};
+  }
+  function fleschDescription(score){
+    if(score>=90)return 'Very easy'; if(score>=80)return 'Easy'; if(score>=70)return 'Fairly easy';
+    if(score>=60)return 'Plain English'; if(score>=50)return 'Fairly difficult'; if(score>=30)return 'Difficult'; return 'Very difficult';
+  }
+  function fogDescription(score){
+    if(score<8)return 'Easy to read'; if(score<12)return 'Plain / conversational'; if(score<17)return 'Difficult'; return 'Very difficult';
+  }
+  $('analyse').addEventListener('click',()=>{
+    try{
+      const r=analyse(textArea.value);
+      $('flesch').textContent=r.flesch.toFixed(1); $('fleschLabel').textContent=fleschDescription(r.flesch);
+      $('fog').textContent=r.fog.toFixed(1); $('fogLabel').textContent=fogDescription(r.fog);
+      $('stats').textContent=`${r.n.toLocaleString()} words · ${r.sentences.toLocaleString()} sentences · ${r.syllableCount.toLocaleString()} estimated syllables · ${r.complex.toLocaleString()} complex words (3+ syllables)`;
+      $('output').classList.remove('hidden'); status.textContent='Analysis complete.';
+    }catch(e){$('output').classList.add('hidden');status.textContent=e.message;status.className='status error';}
+  });
+  async function readFile(file){
+    status.className='status'; status.textContent=`Reading ${file.name}…`;
+    try{
+      const ext=file.name.toLowerCase().split('.').pop(); let extracted='';
+      if(ext==='txt') extracted=await file.text();
+      else if(ext==='docx'){
+        if(!window.mammoth) throw new Error('Could not load the Word document reader. Check your internet connection and try again.');
+        const result=await mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()}); extracted=result.value;
+      } else if(ext==='pdf'){
+        if(!window.pdfjsLib) throw new Error('Could not load the PDF reader. Check your internet connection and try again.');
+        const pdf=await pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
+        const pages=[];
+        for(let i=1;i<=pdf.numPages;i++){
+          const page=await pdf.getPage(i); const content=await page.getTextContent();
+          pages.push(content.items.map(item=>item.str).join(' '));
+        }
+        extracted=pages.join('\n');
+      } else throw new Error('Please choose a .txt, .pdf, or .docx file.');
+      if(!extracted.trim()) throw new Error('No selectable text found. Scanned or image-only documents need OCR.');
+      textArea.value=extracted; status.textContent=`Loaded ${file.name}. Select “Analyse readability” to calculate the scores.`;
+      $('output').classList.add('hidden');
+    }catch(e){status.className='status error';status.textContent=e.message||'Unable to read this file.';}
+  }
+  fileInput.addEventListener('change',e=>{if(e.target.files[0])readFile(e.target.files[0]);});
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
+  drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)readFile(f);});
+})();
+</script>
+</body>
+</html>
